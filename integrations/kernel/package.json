@@ -1,0 +1,24 @@
+{
+  "name": "qt-rtthread",
+  "description": "Qt GUI, Widgets, QML and software Qt Quick for RT-Thread kernel mode.",
+  "description_zh": "面向 RT-Thread 内核态的 Qt GUI、Widgets、QML 与软件 Qt Quick 软件包。",
+  "enable": "PKG_USING_QT_RTTHREAD",
+  "keywords": ["Qt", "GUI", "QML", "QtQuick", "RT-Thread"],
+  "category": "multimedia",
+  "author": {
+    "name": "wusongjie",
+    "email": "wusongjie@rt-thread.com"
+  },
+  "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+  "repository": "https://github.com/GuEe-GUI/Qt-for-RT-Thread.git",
+  "homepage": "https://github.com/GuEe-GUI/Qt-for-RT-Thread",
+  "readme": "RT-Thread kernel-mode Qt SDK and SCons integration.",
+  "site": [
+    {
+      "version": "latest",
+      "URL": "https://github.com/GuEe-GUI/Qt-for-RT-Thread.git",
+      "filename": "",
+      "VER_SHA": "master"
+    }
+  ]
+}

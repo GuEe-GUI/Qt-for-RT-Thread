@@ -1,0 +1,6 @@
+0100-qml-qv4-high-address-support.patch
+0110-qml-synchronous-loader.patch
+0120-qthread-startup-unlock.patch
+0130-event-dispatcher-input-notifiers.patch
+0140-qthread-thread-data-accessor.patch
+0150-riscv64-musl-mkspec.patch

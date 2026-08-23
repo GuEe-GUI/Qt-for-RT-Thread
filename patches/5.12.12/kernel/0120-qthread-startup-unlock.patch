@@ -1,0 +1,23 @@
+diff --git a/qtbase/src/corelib/thread/qthread_rtthread.cpp b/qtbase/src/corelib/thread/qthread_rtthread.cpp
+index 916cd9c57..e65c20988 100644
+--- a/qtbase/src/corelib/thread/qthread_rtthread.cpp
++++ b/qtbase/src/corelib/thread/qthread_rtthread.cpp
+@@ -245,12 +245,12 @@ void *QThreadPrivate::start(void *arg)
+ {
+     QThread *thread = reinterpret_cast<QThread *>(arg);
+     QThreadData *data = QThreadData::get2(thread);
+-    QMutexLocker locker(&thread->d_func()->mutex);
+-
+-    data->threadId.store(reinterpret_cast<Qt::HANDLE>(quintptr(rt_thread_self())));
+-
+-    data->ref();
+-    data->quitNow = thread->d_func()->exited;
++    {
++        QMutexLocker locker(&thread->d_func()->mutex);
++        data->threadId.store(reinterpret_cast<Qt::HANDLE>(quintptr(rt_thread_self())));
++        data->ref();
++        data->quitNow = thread->d_func()->exited;
++    }
+ 
+     data->ensureEventDispatcher();
+ 

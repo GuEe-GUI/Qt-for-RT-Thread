@@ -1,0 +1,5 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/">
+    <file alias="qml_main.qml">dashboard.qml</file>
+</qresource>
+</RCC>

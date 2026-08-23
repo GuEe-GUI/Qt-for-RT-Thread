@@ -1,0 +1,9 @@
+# Format: module|archive|sha256
+# URLs are resolved below the official Qt 5.12.12 submodules archive path.
+base_url=https://download.qt.io/archive/qt/5.12/5.12.12/submodules
+
+# Verified from the official Qt mirror metadata.
+qtbase|qtbase-everywhere-src-5.12.12.zip|9552dd8ce926871004e1051b81a39e6161fb330e759d5e0a72e29abc97ffa293
+
+# Add qtdeclarative, qtquickcontrols2 and qtsvg only after their official
+# checksums have been recorded and verified.

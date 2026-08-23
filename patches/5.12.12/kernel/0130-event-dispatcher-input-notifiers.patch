@@ -1,0 +1,155 @@
+diff --git a/qtbase/src/corelib/kernel/qeventdispatcher_unix.cpp b/qtbase/src/corelib/kernel/qeventdispatcher_unix.cpp
+index b63bc9364..e9e20fc60 100644
+--- a/qtbase/src/corelib/kernel/qeventdispatcher_unix.cpp
++++ b/qtbase/src/corelib/kernel/qeventdispatcher_unix.cpp
+@@ -55,6 +55,10 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ 
++#if defined(Q_OS_RTTHREAD)
++#  include <rtthread.h>
++#endif
++
+ #ifndef QT_NO_EVENTFD
+ #  include <sys/eventfd.h>
+ #endif
+@@ -93,6 +97,9 @@ QThreadPipe::QThreadPipe()
+ {
+     fds[0] = -1;
+     fds[1] = -1;
++#if defined(Q_OS_RTTHREAD)
++    rtSemaphore = nullptr;
++#endif
+ #if defined(Q_OS_VXWORKS)
+     name[0] = '\0';
+ #endif
+@@ -100,11 +107,16 @@ QThreadPipe::QThreadPipe()
+ 
+ QThreadPipe::~QThreadPipe()
+ {
++#if defined(Q_OS_RTTHREAD)
++    if (rtSemaphore)
++        rt_sem_delete(static_cast<rt_sem_t>(rtSemaphore));
++#else
+     if (fds[0] >= 0)
+         close(fds[0]);
+ 
+     if (fds[1] >= 0)
+         close(fds[1]);
++#endif
+ 
+ #if defined(Q_OS_VXWORKS)
+     pipeDevDelete(name, true);
+@@ -130,7 +142,10 @@ static void initThreadPipeFD(int fd)
+ 
+ bool QThreadPipe::init()
+ {
+-#if defined(Q_OS_NACL) || defined(Q_OS_WASM)
++#if defined(Q_OS_RTTHREAD)
++    rtSemaphore = rt_sem_create("qtevent", 0, RT_IPC_FLAG_FIFO);
++    return rtSemaphore != nullptr;
++#elif defined(Q_OS_NACL) || defined(Q_OS_WASM)
+    // do nothing.
+ #elif defined(Q_OS_VXWORKS)
+     qsnprintf(name, sizeof(name), "/pipe/qt_%08x", int(taskIdSelf()));
+@@ -173,6 +188,9 @@ pollfd QThreadPipe::prepare() const
+ void QThreadPipe::wakeUp()
+ {
+     if (wakeUps.testAndSetAcquire(0, 1)) {
++#if defined(Q_OS_RTTHREAD)
++        rt_sem_release(static_cast<rt_sem_t>(rtSemaphore));
++#else
+ #ifndef QT_NO_EVENTFD
+         if (fds[1] == -1) {
+             // eventfd
+@@ -184,6 +202,7 @@ void QThreadPipe::wakeUp()
+ #endif
+         char c = 0;
+         qt_safe_write(fds[1], &c, 1);
++#endif
+     }
+ }
+ 
+@@ -485,6 +504,59 @@ bool QEventDispatcherUNIX::processEvents(QEventLoop::ProcessEventsFlags flags)
+     if (!canWait || (include_timers && d->timerList.timerWait(wait_tm)))
+         tm = &wait_tm;
+ 
++#if defined(Q_OS_RTTHREAD)
++    d->pollfds.clear();
++    d->pollfds.reserve(include_notifiers ? d->socketNotifiers.size() : 0);
++
++    if (include_notifiers) {
++        for (auto it = d->socketNotifiers.cbegin(); it != d->socketNotifiers.cend(); ++it)
++            d->pollfds.append(qt_make_pollfd(it.key(), it.value().events()));
++    }
++
++    int nevents = 0;
++    rt_int32_t timeout = 0;
++    if (canWait) {
++        if (!tm) {
++            timeout = RT_WAITING_FOREVER;
++        } else {
++            const qint64 milliseconds = qint64(tm->tv_sec) * 1000
++                    + (tm->tv_nsec + 999999) / 1000000;
++            timeout = rt_tick_from_millisecond(milliseconds);
++            if (timeout == 0 && milliseconds > 0)
++                timeout = 1;
++        }
++    }
++
++    const timespec noWait = { 0, 0 };
++    if (!d->pollfds.isEmpty()) {
++        const int ready = qt_safe_poll(d->pollfds.data(), d->pollfds.size(), &noWait);
++        if (ready < 0)
++            perror("qt_safe_poll");
++        else if (ready > 0)
++            nevents += d->activateSocketNotifiers();
++    }
++
++    if (!nevents) {
++        // RT-Thread's semaphore cannot be included in poll().  Keep the
++        // semaphore for cross-thread wakeups, but periodically return to
++        // poll registered device descriptors such as evdev input nodes.
++        if (!d->pollfds.isEmpty() && (timeout == RT_WAITING_FOREVER || timeout > 1))
++            timeout = 1;
++
++        if (rt_sem_take(static_cast<rt_sem_t>(d->threadPipe.rtSemaphore), timeout) == RT_EOK) {
++            d->threadPipe.wakeUps.storeRelease(0);
++            ++nevents;
++        }
++
++        if (!d->pollfds.isEmpty()) {
++            const int ready = qt_safe_poll(d->pollfds.data(), d->pollfds.size(), &noWait);
++            if (ready < 0)
++                perror("qt_safe_poll");
++            else if (ready > 0)
++                nevents += d->activateSocketNotifiers();
++        }
++    }
++#else
+     d->pollfds.clear();
+     d->pollfds.reserve(1 + (include_notifiers ? d->socketNotifiers.size() : 0));
+ 
+@@ -509,6 +581,7 @@ bool QEventDispatcherUNIX::processEvents(QEventLoop::ProcessEventsFlags flags)
+             nevents += d->activateSocketNotifiers();
+         break;
+     }
++#endif
+ 
+     if (include_timers)
+         nevents += d->activateTimers();
+diff --git a/qtbase/src/corelib/kernel/qeventdispatcher_unix_p.h b/qtbase/src/corelib/kernel/qeventdispatcher_unix_p.h
+index b7fccd35e..2888a0f72 100644
+--- a/qtbase/src/corelib/kernel/qeventdispatcher_unix_p.h
++++ b/qtbase/src/corelib/kernel/qeventdispatcher_unix_p.h
+@@ -90,6 +90,10 @@ struct QThreadPipe
+     int fds[2];
+     QAtomicInt wakeUps;
+ 
++#if defined(Q_OS_RTTHREAD)
++    void *rtSemaphore;
++#endif
++
+ #if defined(Q_OS_VXWORKS)
+     static const int len_name = 20;
+     char name[len_name];

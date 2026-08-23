@@ -1,0 +1,141 @@
+diff --git a/qtbase/mkspecs/devices/rtthread-riscv64-linux-musl-g++/qmake.conf b/qtbase/mkspecs/devices/rtthread-riscv64-linux-musl-g++/qmake.conf
+new file mode 100644
+index 000000000..ba0fef84f
+--- /dev/null
++++ b/qtbase/mkspecs/devices/rtthread-riscv64-linux-musl-g++/qmake.conf
+@@ -0,0 +1,56 @@
++#
++# qmake configuration for RT-Thread kernel mode on RV64GC with a musl
++# toolchain.  Pass a toolchain prefix ending in '-' through CROSS_COMPILE to
++# configure, for example:
++#   -device-option CROSS_COMPILE=riscv64-unknown-linux-musl-
++#
++
++MAKEFILE_GENERATOR          = UNIX
++CONFIG                     += incremental gdb_dwarf_index
++QMAKE_INCREMENTAL_STYLE     = sublib
++
++QMAKE_PLATFORM             += rtthread
++
++QMAKE_PREFIX_SHLIB          = lib
++QMAKE_EXTENSION_SHLIB       = so
++QMAKE_PREFIX_STATICLIB      = lib
++QMAKE_EXTENSION_STATICLIB   = a
++
++QMAKE_COMPILER              = gcc
++CROSS_COMPILE               = riscv64-unknown-linux-musl-
++RISCV_ABI                   = lp64
++QMAKE_CC                    = $${CROSS_COMPILE}gcc
++QMAKE_CXX                   = $${CROSS_COMPILE}g++
++QMAKE_LINK                  = $${CROSS_COMPILE}g++
++QMAKE_LINK_SHLIB            = $${CROSS_COMPILE}g++
++
++QMAKE_AR                    = $${CROSS_COMPILE}ar cqs
++QMAKE_OBJCOPY               = $${CROSS_COMPILE}objcopy
++QMAKE_STRIP                 = $${CROSS_COMPILE}strip
++QMAKE_RANLIB                = $${CROSS_COMPILE}ranlib
++
++# Qt is statically linked into the kernel image.  Force local-exec TLS so
++# RISC-V accesses use the per-thread tp block created by RT-Thread instead of
++# emitting dynamic-TLS __tls_get_addr calls.
++QMAKE_CFLAGS               += -DQ_OS_RTTHREAD -pipe -fPIC -ftls-model=local-exec -mcmodel=medany -march=rv64imafdc -mabi=$${RISCV_ABI} -fno-exceptions
++QMAKE_CXXFLAGS             += -DQ_OS_RTTHREAD -pipe -fPIC -ftls-model=local-exec -mcmodel=medany -march=rv64imafdc -mabi=$${RISCV_ABI} -std=c++11 -fno-exceptions
++
++QMAKE_LFLAGS               += -mcmodel=medany -march=rv64imafdc -mabi=$${RISCV_ABI} -static -Wl,--whole-archive -Wl,--no-whole-archive
++QMAKE_LFLAGS_APP           += -mcmodel=medany -march=rv64imafdc -mabi=$${RISCV_ABI} -static -Wl,--whole-archive -Wl,--no-whole-archive
++QMAKE_LFLAGS_PLUGIN        += -mcmodel=medany -march=rv64imafdc -mabi=$${RISCV_ABI} -static -Wl,--whole-archive -Wl,--no-whole-archive
++
++QMAKE_INCDIR               += $$(RTT_ROOT)/include
++QMAKE_INCDIR               += $$(RTT_ROOT)/libcpu/risc-v/common/include
++QMAKE_INCDIR               += $$(RTT_ROOT)/components/dfs/dfs_v2/include
++QMAKE_INCDIR               += $$(RTT_ROOT)/components/drivers/include
++QMAKE_INCDIR               += $$(RTT_ROOT)/components/finsh
++QMAKE_INCDIR               += $$(RTT_ROOT)/components/mm
++QMAKE_INCDIR               += $$(RTT_ROOT)/components/utilities/libadt/bitmap
++QMAKE_INCDIR               += $$(BSP_DIR)/
++QMAKE_LIBDIR               += $$(BSP_DIR)/
++# GCC emits libatomic calls for subword C++ atomics on RV64.  Qt QML uses
++# those operations internally, so keep the runtime archive in every target
++# link as well as in the SDK consumer's SCons link list.
++QMAKE_LIBS                 += -latomic -lc -lm -lgcc
++
++load(qt_config)
+diff --git a/qtbase/mkspecs/devices/rtthread-riscv64-linux-musl-g++/qplatformdefs.h b/qtbase/mkspecs/devices/rtthread-riscv64-linux-musl-g++/qplatformdefs.h
+new file mode 100644
+index 000000000..13b922ef5
+--- /dev/null
++++ b/qtbase/mkspecs/devices/rtthread-riscv64-linux-musl-g++/qplatformdefs.h
+@@ -0,0 +1,73 @@
++/****************************************************************************
++**
++** Copyright (C) 2024 The Shanghai Real-Thread Electronic Technology Co., Ltd.
++**
++** SPDX-License-Identifier: LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
++**
++****************************************************************************/
++
++#ifndef QPLATFORMDEFS_H
++#define QPLATFORMDEFS_H
++
++#define QT_NO_STATVFS
++
++#include "qglobal.h"
++
++#ifndef _GNU_SOURCE
++#  define _GNU_SOURCE
++#endif
++
++#include <unistd.h>
++#include <features.h>
++#include <pthread.h>
++#include <dirent.h>
++#include <fcntl.h>
++#include <grp.h>
++#include <pwd.h>
++#include <signal.h>
++#include <sys/types.h>
++#include <sys/ioctl.h>
++#include <sys/ipc.h>
++#include <sys/time.h>
++#include <sys/shm.h>
++#include <sys/socket.h>
++#include <sys/stat.h>
++#include <sys/wait.h>
++#include <netinet/in.h>
++
++#define QT_USE_XOPEN_LFS_EXTENSIONS
++#include "../../common/posix/qplatformdefs.h"
++
++#undef QT_OFF_T
++#undef QT_STATBUF
++#undef QT_STATBUF_F
++#undef QT_STAT
++#undef QT_FSTAT
++#undef QT_LSEEK
++#undef QT_FSEEK
++#undef QT_FTELL
++#undef QT_OPEN
++#undef QT_FTRUNCATE
++#undef QT_TRUNCATE
++#undef QT_MMAP
++#undef QT_LSTAT
++#undef QT_DIRENT
++#undef QT_READDIR
++
++#define QT_OFF_T                off_t
++#define QT_STATBUF              struct stat
++#define QT_STATBUF_F            struct stat
++#define QT_STAT                 ::stat
++#define QT_FSTAT                ::fstat
++#define QT_LSEEK                ::lseek
++#define QT_FSEEK                ::fseeko
++#define QT_FTELL                ::ftello
++#define QT_OPEN                 ::open
++#define QT_FTRUNCATE            ::ftruncate
++#define QT_TRUNCATE             ::truncate
++#define QT_MMAP                 ::mmap
++#define QT_LSTAT                ::lstat
++#define QT_DIRENT               struct dirent
++#define QT_READDIR              ::readdir
++
++#endif // QPLATFORMDEFS_H

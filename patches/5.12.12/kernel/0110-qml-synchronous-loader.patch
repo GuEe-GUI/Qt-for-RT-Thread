@@ -1,0 +1,135 @@
+diff --git a/qtdeclarative/src/qml/qml/ftw/qqmlthread.cpp b/qtdeclarative/src/qml/qml/ftw/qqmlthread.cpp
+index 153f22fcc..624f9b976 100644
+--- a/qtdeclarative/src/qml/qml/ftw/qqmlthread.cpp
++++ b/qtdeclarative/src/qml/qml/ftw/qqmlthread.cpp
+@@ -68,6 +68,9 @@ public:
+     quint32 m_mainProcessing:1; // Set when the main thread is processing messages
+     quint32 m_shutdown:1; // Set by main thread to request a shutdown
+     quint32 m_mainThreadWaiting:1; // Set by main thread if it is waiting for the message queue to empty
++#if defined(Q_OS_RTTHREAD)
++    quint32 m_synchronousLoadCall:1;
++#endif
+ 
+     typedef QFieldList<QQmlThread::Message, &QQmlThread::Message::next> MessageList;
+     MessageList threadList;
+@@ -124,7 +127,11 @@ bool QQmlThreadPrivate::MainObject::event(QEvent *e)
+ 
+ QQmlThreadPrivate::QQmlThreadPrivate(QQmlThread *q)
+ : q(q), m_threadProcessing(false), m_mainProcessing(false), m_shutdown(false),
+-  m_mainThreadWaiting(false), mainSync(nullptr), m_mainObject(this)
++  m_mainThreadWaiting(false),
++#if defined(Q_OS_RTTHREAD)
++  m_synchronousLoadCall(false),
++#endif
++  mainSync(nullptr), m_mainObject(this)
+ {
+     setObjectName(QStringLiteral("QQmlThread"));
+ }
+@@ -223,6 +230,10 @@ QQmlThread::~QQmlThread()
+ 
+ void QQmlThread::startup()
+ {
++#if defined(Q_OS_RTTHREAD)
++    startupThread();
++    return;
++#endif
+     d->lock();
+     d->start();
+     d->wait();
+@@ -232,6 +243,13 @@ void QQmlThread::startup()
+ 
+ void QQmlThread::shutdown()
+ {
++#if defined(Q_OS_RTTHREAD)
++    if (!d->m_shutdown) {
++        d->m_shutdown = true;
++        shutdownThread();
++    }
++    return;
++#endif
+     d->lock();
+     Q_ASSERT(!d->m_shutdown);
+ 
+@@ -296,12 +314,20 @@ void QQmlThread::wait()
+ 
+ bool QQmlThread::isThisThread() const
+ {
++#if defined(Q_OS_RTTHREAD)
++    return d->m_synchronousLoadCall;
++#else
+     return QThread::currentThread() == d;
++#endif
+ }
+ 
+ QThread *QQmlThread::thread() const
+ {
++#if defined(Q_OS_RTTHREAD)
++    return QThread::currentThread();
++#else
+     return const_cast<QThread *>(static_cast<const QThread *>(d));
++#endif
+ }
+ 
+ // Called when the thread starts.  Do startup stuff in here.
+@@ -316,6 +342,14 @@ void QQmlThread::shutdownThread()
+ 
+ void QQmlThread::internalCallMethodInThread(Message *message)
+ {
++#if defined(Q_OS_RTTHREAD)
++    const bool previous = d->m_synchronousLoadCall;
++    d->m_synchronousLoadCall = true;
++    message->call(this);
++    d->m_synchronousLoadCall = previous;
++    delete message;
++    return;
++#endif
+ #if !QT_CONFIG(thread)
+     message->call(this);
+     delete message;
+@@ -353,6 +387,14 @@ void QQmlThread::internalCallMethodInThread(Message *message)
+ 
+ void QQmlThread::internalCallMethodInMain(Message *message)
+ {
++#if defined(Q_OS_RTTHREAD)
++    const bool previous = d->m_synchronousLoadCall;
++    d->m_synchronousLoadCall = false;
++    message->call(this);
++    d->m_synchronousLoadCall = previous;
++    delete message;
++    return;
++#endif
+     Q_ASSERT(isThisThread());
+ 
+     d->lock();
+@@ -382,6 +424,10 @@ void QQmlThread::internalCallMethodInMain(Message *message)
+ 
+ void QQmlThread::internalPostMethodToThread(Message *message)
+ {
++#if defined(Q_OS_RTTHREAD)
++    internalCallMethodInThread(message);
++    return;
++#endif
+ #if !QT_CONFIG(thread)
+     internalPostMethodToMain(message);
+     return;
+@@ -397,6 +443,10 @@ void QQmlThread::internalPostMethodToThread(Message *message)
+ 
+ void QQmlThread::internalPostMethodToMain(Message *message)
+ {
++#if defined(Q_OS_RTTHREAD)
++    internalCallMethodInMain(message);
++    return;
++#endif
+     Q_ASSERT(isThisThread());
+     d->lock();
+     bool wasEmpty = d->mainList.isEmpty();
+@@ -408,6 +458,9 @@ void QQmlThread::internalPostMethodToMain(Message *message)
+ 
+ void QQmlThread::waitForNextMessage()
+ {
++#if defined(Q_OS_RTTHREAD)
++    return;
++#endif
+     Q_ASSERT(!isThisThread());
+     d->lock();
+     Q_ASSERT(d->m_mainThreadWaiting == false);

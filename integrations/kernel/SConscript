@@ -1,0 +1,161 @@
+from building import *
+import os
+
+cwd = GetCurrentDir()
+
+if not GetDepend('PKG_USING_QT_RTTHREAD'):
+    Return('')
+
+def get_config_string(name):
+    """Read a quoted Kconfig value omitted from rtconfig.h.
+
+    RT-Thread intentionally filters PKG_*_PATH symbols when generating
+    rtconfig.h, so GetConfigValue() cannot see the SDK path.  Read the BSP
+    .config directly instead; this is plain Python and works on Windows too.
+    """
+    prefix = 'CONFIG_%s=' % name
+    config_dirs = [os.getcwd(), Dir('#').abspath]
+    for config_dir in config_dirs:
+        config_path = os.path.join(config_dir, '.config')
+        try:
+            with open(config_path, 'r') as config:
+                for line in config:
+                    if line.startswith(prefix):
+                        value = line[len(prefix):].strip()
+                        if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+                            return value[1:-1]
+                        return value
+        except IOError:
+            pass
+    return ''
+
+sdk_value = (os.environ.get('QT_RTTHREAD_SDK_PATH') or
+             get_config_string('PKG_QT_RTTHREAD_SDK_PATH') or 'sdk/kernel')
+sdk_root = sdk_value if os.path.isabs(sdk_value) else os.path.join(cwd, sdk_value)
+sdk_root = os.path.normpath(sdk_root)
+
+required_dirs = ['include', 'lib', 'plugins']
+missing_dirs = [name for name in required_dirs
+                if not os.path.isdir(os.path.join(sdk_root, name))]
+if missing_dirs:
+    raise RuntimeError('Qt RT-Thread SDK is incomplete at %s (missing: %s). '
+                       'Run the SDK assembly step before scons.'
+                       % (sdk_root, ', '.join(missing_dirs)))
+
+cpppath = [os.path.join(sdk_root, 'include')]
+for module in ['QtCore', 'QtGui', 'QtWidgets', 'QtQml', 'QtQuick',
+               'QtQuickTemplates2', 'QtQuickControls2']:
+    path = os.path.join(sdk_root, 'include', module)
+    if os.path.isdir(path):
+        cpppath.append(path)
+
+archives = []
+archive_paths = set()
+
+def add_archive(relative_path, required=True):
+    path = os.path.join(sdk_root, relative_path)
+    if os.path.isfile(path):
+        path = os.path.normpath(path)
+        if path not in archive_paths:
+            archive_paths.add(path)
+            archives.append(File(path))
+    elif required:
+        raise RuntimeError('Qt RT-Thread SDK archive not found: ' + path)
+
+# Static plugin registrars are compiled as package source; the corresponding
+# archives remain ordinary SCons nodes and are therefore dependency-tracked.
+add_archive('plugins/platforms/librtthreadfb.a')
+
+if GetDepend('PKG_QT_RTTHREAD_INPUT_GENERIC'):
+    add_archive('plugins/generic/libqevdevmouseplugin.a')
+    add_archive('plugins/generic/libqevdevkeyboardplugin.a')
+
+if GetDepend('PKG_QT_RTTHREAD_IMAGEFORMATS'):
+    add_archive('plugins/imageformats/libqgif.a')
+    add_archive('plugins/imageformats/libqico.a')
+    add_archive('plugins/imageformats/libqjpeg.a')
+
+if GetDepend('PKG_QT_RTTHREAD_QML'):
+    add_archive('qml/QtQuick.2/libqtquick2plugin.a')
+    add_archive('qml/QtQuick/Window.2/libwindowplugin.a')
+    add_archive('qml/QtQuick/Layouts/libqquicklayoutsplugin.a')
+
+if GetDepend('PKG_QT_RTTHREAD_QUICK_CONTROLS2'):
+    add_archive('qml/QtQuick/Templates.2/libqtquicktemplates2plugin.a')
+    add_archive('qml/QtQuick/Controls.2/libqtquickcontrols2plugin.a')
+    if GetDepend('PKG_QT_RTTHREAD_STYLE_FUSION'):
+        add_archive('qml/QtQuick/Controls.2/Fusion/libqtquickcontrols2fusionstyleplugin.a')
+    elif GetDepend('PKG_QT_RTTHREAD_STYLE_MATERIAL'):
+        add_archive('qml/QtQuick/Controls.2/Material/libqtquickcontrols2materialstyleplugin.a')
+    elif GetDepend('PKG_QT_RTTHREAD_STYLE_UNIVERSAL'):
+        add_archive('qml/QtQuick/Controls.2/Universal/libqtquickcontrols2universalstyleplugin.a')
+
+if GetDepend('PKG_QT_RTTHREAD_GALLERY_DEMO'):
+    # The upstream Gallery declares all three style modules and Qt.labs.settings
+    # even though Fusion is selected at runtime.
+    add_archive('qml/QtQuick/Controls.2/Fusion/libqtquickcontrols2fusionstyleplugin.a')
+    add_archive('qml/QtQuick/Controls.2/Material/libqtquickcontrols2materialstyleplugin.a')
+    add_archive('qml/QtQuick/Controls.2/Universal/libqtquickcontrols2universalstyleplugin.a')
+    add_archive('qml/Qt/labs/settings/libqmlsettingsplugin.a')
+
+# Keep the same proven static-library order as the qemu-virt64-aarch64 port.
+if GetDepend('PKG_QT_RTTHREAD_QUICK_CONTROLS2'):
+    add_archive('lib/libQt5QuickControls2.a')
+    add_archive('lib/libQt5QuickTemplates2.a')
+if GetDepend('PKG_QT_RTTHREAD_QML'):
+    add_archive('lib/libQt5Quick.a')
+    add_archive('lib/libQt5Qml.a')
+if GetDepend('PKG_QT_RTTHREAD_WIDGETS'):
+    add_archive('lib/libQt5Widgets.a')
+
+for library in ['libQt5Gui.a', 'libqtlibpng.a', 'libQt5Core.a', 'libqtpcre2.a',
+                'libQt5FbSupport.a', 'libQt5FontDatabaseSupport.a',
+                'libqtfreetype.a', 'libQt5EventDispatcherSupport.a',
+                'libQt5InputSupport.a', 'libQt5DeviceDiscoverySupport.a']:
+    add_archive(os.path.join('lib', library))
+
+# Some SDKs build QtInputSupport with its qtslib object.  Once another static
+# Qt object pulls that backend into the link, its tslib references must be
+# resolvable even when the runtime input profile uses evdev.  Link tslib when
+# the assembled SDK provides it, while keeping tslib-free SDKs (such as RV64
+# QEMU) valid.
+add_archive('lib/libts.a', required=False)
+
+if GetDepend('PKG_QT_RTTHREAD_DEMO'):
+    demo_value = get_config_string('PKG_QT_RTTHREAD_DEMO_ARCHIVE')
+    if not demo_value:
+        demo_value = GetConfigValue('PKG_QT_RTTHREAD_DEMO_ARCHIVE')
+    if len(demo_value) >= 2 and demo_value[0] == '"' and demo_value[-1] == '"':
+        demo_value = demo_value[1:-1]
+    if not demo_value:
+        if GetDepend('PKG_QT_RTTHREAD_GALLERY_DEMO'):
+            demo_path = os.path.join(sdk_root, 'examples', 'libqt_quick_gallery.a')
+        else:
+            raise RuntimeError('Qt demo archive is not configured. Set '
+                               'PKG_QT_RTTHREAD_DEMO_ARCHIVE.')
+    else:
+        demo_path = demo_value if os.path.isabs(demo_value) else os.path.join(cwd, demo_value)
+    if not os.path.isfile(demo_path):
+        raise RuntimeError('Qt demo archive not found: ' + demo_path)
+    # qt_main is the archive entry point. Resources must be explicitly
+    # initialized by that entry point so SCons can link the archive normally.
+    # AArch64 mainline SConscript rewrites LINKFLAGS as a string.  Keep that
+    # type here instead of using Env.Append(), which would turn it into a list.
+    Env['LINKFLAGS'] += ' -Wl,-u,qt_main'
+    archives.insert(0, File(demo_path))
+
+# Qt and its static plugins have circular references.  Archives belong in
+# LIBS, rather than LINKFLAGS: RT-Thread's SConstruct emits LIBS after object
+# files and wraps the list in an ld start/end group.  This lets unresolved
+# QtCore/QtQml POSIX references pull libc during the group rescan.
+Env.Append(LIBS=archives + ['stdc++', 'atomic', 'c', 'gcc'])
+
+src = [os.path.join(cwd, 'src', 'qt_rtthread_plugins.cpp'),
+       os.path.join(cwd, 'src', 'qt_rtthread_thread_data.c')]
+if GetDepend('PKG_QT_RTTHREAD_DEFAULT_ENTRY'):
+    src.append(os.path.join(cwd, 'src', 'qt_rtthread_entry.c'))
+group = DefineGroup('Qt-RT-Thread', src,
+                    depend=['PKG_USING_QT_RTTHREAD'],
+                    CPPPATH=cpppath)
+
+Return('group')

@@ -1,0 +1,35 @@
+diff --git a/qtbase/src/corelib/thread/qthread_rtthread.cpp b/qtbase/src/corelib/thread/qthread_rtthread.cpp
+index e65c20988..000000000 100644
+--- a/qtbase/src/corelib/thread/qthread_rtthread.cpp
++++ b/qtbase/src/corelib/thread/qthread_rtthread.cpp
+@@ -119,6 +119,15 @@ extern "C" rt_weak void rt_hw_us_delay(rt_uint32_t us)
+     RT_UNUSED(us);
+ }
+ 
++/*
++ * Keep the Qt archive independent of the RT-Thread TCB layout.  Kernel and
++ * Smart configurations have different struct rt_thread layouts, so the BSP
++ * integration supplies these two accessors from code compiled with its own
++ * headers.
++ */
++extern "C" rt_ubase_t qt_rtthread_thread_data_get(void);
++extern "C" void qt_rtthread_thread_data_set(rt_ubase_t value);
++
+ QT_BEGIN_NAMESPACE
+ 
+ QAtomicInt QThreadPrivate::_qthread_uid(0);
+@@ -170,12 +179,12 @@ static unsigned char to_rt_thread_priority(QThread::Priority threadPriority)
+ 
+ static QThreadData *get_thread_data(void)
+ {
+-    return reinterpret_cast<QThreadData *>(rt_thread_self()->user_data);
++    return reinterpret_cast<QThreadData *>(qt_rtthread_thread_data_get());
+ }
+ 
+ static void set_thread_data(QThreadData *data)
+ {
+-    rt_thread_self()->user_data = reinterpret_cast<rt_ubase_t>(data);
++    qt_rtthread_thread_data_set(reinterpret_cast<rt_ubase_t>(data));
+ }
+ 
+ static void clear_thread_data(void)

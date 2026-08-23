@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/qt-rtthread">
+        <file alias="tvtennis.qml">../../../../qtdeclarative/examples/quick/animation/behaviors/tvtennis.qml</file>
+    </qresource>
+</RCC>

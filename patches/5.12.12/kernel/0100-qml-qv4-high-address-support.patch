@@ -1,0 +1,190 @@
+diff --git a/qtdeclarative/src/3rdparty/masm/wtf/OSAllocatorPosix.cpp b/qtdeclarative/src/3rdparty/masm/wtf/OSAllocatorPosix.cpp
+index 8ce5841f1..78302a934 100644
+--- a/qtdeclarative/src/3rdparty/masm/wtf/OSAllocatorPosix.cpp
++++ b/qtdeclarative/src/3rdparty/masm/wtf/OSAllocatorPosix.cpp
+@@ -37,6 +37,10 @@
+ #include <wtf/Assertions.h>
+ #include <wtf/UnusedParam.h>
+ 
++#if defined(Q_OS_RTTHREAD)
++#include <rtthread.h>
++#endif
++
+ #if OS(LINUX)
+ #include <sys/syscall.h>
+ #ifndef MFD_CLOEXEC
+@@ -109,7 +113,14 @@ static int memfdForUsage(size_t bytes, OSAllocator::Usage usage)
+ 
+ void* OSAllocator::reserveUncommitted(size_t bytes, Usage usage, bool writable, bool executable)
+ {
+-#if OS(QNX)
++#if defined(Q_OS_RTTHREAD)
++    UNUSED_PARAM(usage);
++    UNUSED_PARAM(writable);
++    UNUSED_PARAM(executable);
++    void *result = rt_malloc_align(bytes, pageSize());
++    if (!result)
++        CRASH();
++#elif OS(QNX)
+     // Reserve memory with PROT_NONE and MAP_LAZY so it isn't committed now.
+     void* result = mmap(0, bytes, PROT_NONE, MAP_LAZY | MAP_PRIVATE | MAP_ANON, -1, 0);
+     if (result == MAP_FAILED)
+@@ -141,6 +152,16 @@ void* OSAllocator::reserveUncommitted(size_t bytes, Usage usage, bool writable,
+ 
+ void* OSAllocator::reserveAndCommit(size_t bytes, Usage usage, bool writable, bool executable, bool includesGuardPages)
+ {
++#if defined(Q_OS_RTTHREAD)
++    UNUSED_PARAM(usage);
++    UNUSED_PARAM(writable);
++    UNUSED_PARAM(executable);
++    UNUSED_PARAM(includesGuardPages);
++    void *result = rt_malloc_align(bytes, pageSize());
++    if (!result)
++        CRASH();
++    return result;
++#else
+     // All POSIX reservations start out logically committed.
+     int protection = PROT_READ;
+     if (writable)
+@@ -210,11 +231,17 @@ void* OSAllocator::reserveAndCommit(size_t bytes, Usage usage, bool writable, bo
+ #endif
+ 
+     return result;
++#endif
+ }
+ 
+ void OSAllocator::commit(void* address, size_t bytes, bool writable, bool executable)
+ {
+-#if OS(QNX)
++#if defined(Q_OS_RTTHREAD)
++    UNUSED_PARAM(address);
++    UNUSED_PARAM(bytes);
++    UNUSED_PARAM(writable);
++    UNUSED_PARAM(executable);
++#elif OS(QNX)
+     int protection = PROT_READ;
+     if (writable)
+         protection |= PROT_WRITE;
+@@ -246,7 +273,10 @@ void OSAllocator::commit(void* address, size_t bytes, bool writable, bool execut
+ 
+ void OSAllocator::decommit(void* address, size_t bytes)
+ {
+-#if OS(QNX)
++#if defined(Q_OS_RTTHREAD)
++    UNUSED_PARAM(address);
++    UNUSED_PARAM(bytes);
++#elif OS(QNX)
+     // Use PROT_NONE and MAP_LAZY to decommit the pages.
+     mmap(address, bytes, PROT_NONE, MAP_FIXED | MAP_LAZY | MAP_PRIVATE | MAP_ANON, -1, 0);
+ #elif OS(LINUX)
+@@ -267,13 +297,21 @@ void OSAllocator::decommit(void* address, size_t bytes)
+ 
+ void OSAllocator::releaseDecommitted(void* address, size_t bytes)
+ {
++#if defined(Q_OS_RTTHREAD)
++    UNUSED_PARAM(bytes);
++    rt_free_align(address);
++#else
+     int result = munmap(address, bytes);
+     if (result == -1)
+         CRASH();
++#endif
+ }
+ 
+ bool OSAllocator::canAllocateExecutableMemory()
+ {
++#if defined(Q_OS_RTTHREAD)
++    return false;
++#else
+     int flags = MAP_PRIVATE | MAP_ANON;
+ #if PLATFORM(IOS)
+     if (executable)
+@@ -285,6 +323,7 @@ bool OSAllocator::canAllocateExecutableMemory()
+         return false;
+     munmap(testPage, size);
+     return true;
++#endif
+ }
+ 
+ } // namespace WTF
+diff --git a/qtdeclarative/src/3rdparty/masm/wtf/PageBlock.cpp b/qtdeclarative/src/3rdparty/masm/wtf/PageBlock.cpp
+index 0b8d6b348..a2f84aa52 100644
+--- a/qtdeclarative/src/3rdparty/masm/wtf/PageBlock.cpp
++++ b/qtdeclarative/src/3rdparty/masm/wtf/PageBlock.cpp
+@@ -27,6 +27,10 @@
+ #include "config.h"
+ #include "PageBlock.h"
+ 
++#if defined(Q_OS_RTTHREAD)
++#include <rtthread.h>
++#endif
++
+ #if OS(UNIX)
+ #include <unistd.h>
+ #endif
+@@ -42,7 +46,9 @@ static size_t s_pageMask;
+ 
+ inline size_t systemPageSize()
+ {
++#if defined(Q_OS_RTTHREAD)
++    return RT_MM_PAGE_SIZE;
++#else
+     return ::sysconf(_SC_PAGESIZE);
++#endif
+ }
+ 
+ #elif OS(WINDOWS)
+diff --git a/qtdeclarative/src/qml/jsruntime/qv4propertykey_p.h b/qtdeclarative/src/qml/jsruntime/qv4propertykey_p.h
+index 29e11f6b6..1836f3ca1 100644
+--- a/qtdeclarative/src/qml/jsruntime/qv4propertykey_p.h
++++ b/qtdeclarative/src/qml/jsruntime/qv4propertykey_p.h
+@@ -92,7 +92,10 @@ private:
+     {
+         Heap::StringOrSymbol *b;
+ #if defined(Q_OS_RTTHREAD) && defined(KERNEL_VADDR_START)
+-        quint64 tmp = val | KERNEL_VADDR_START;
++        static const quint64 KernelPointerFlag = quint64(1) << 48;
++        quint64 tmp = val;
++        if (tmp & KernelPointerFlag)
++            tmp = (tmp & ~KernelPointerFlag) | quint64(KERNEL_VADDR_START);
+         memcpy(&b, &tmp, 8);
+ #else
+         memcpy(&b, &val, 8);
+@@ -103,7 +106,9 @@ private:
+     {
+         memcpy(&val, &b, 8);
+ #if defined(Q_OS_RTTHREAD) && defined(KERNEL_VADDR_START)
+-        val &= ~KERNEL_VADDR_START;
++        static const quint64 KernelPointerFlag = quint64(1) << 48;
++        if ((val & quint64(KERNEL_VADDR_START)) == quint64(KERNEL_VADDR_START))
++            val = (val & ~quint64(KERNEL_VADDR_START)) | KernelPointerFlag;
+ #endif
+     }
+ #elif QT_POINTER_SIZE == 4
+diff --git a/qtdeclarative/src/qml/jsruntime/qv4value_p.h b/qtdeclarative/src/qml/jsruntime/qv4value_p.h
+index b1a505f41..26c5f8e23 100644
+--- a/qtdeclarative/src/qml/jsruntime/qv4value_p.h
++++ b/qtdeclarative/src/qml/jsruntime/qv4value_p.h
+@@ -159,7 +159,10 @@ struct Q_QML_PRIVATE_EXPORT Value
+         _tmp = (_tmp << 14) | (_val ^ _tmp);
+         memcpy(&b, &_tmp, 8);
+ #elif defined(Q_OS_RTTHREAD) && defined(KERNEL_VADDR_START)
+-        quint64 _tmp = _val | KERNEL_VADDR_START;
++        static const quint64 KernelPointerFlag = quint64(1) << 48;
++        quint64 _tmp = _val;
++        if (_tmp & KernelPointerFlag)
++            _tmp = (_tmp & ~KernelPointerFlag) | quint64(KERNEL_VADDR_START);
+         memcpy(&b, &_tmp, 8);
+ #else
+         memcpy(&b, &_val, 8);
+@@ -176,7 +179,9 @@ struct Q_QML_PRIVATE_EXPORT Value
+         _val |= ((_val & (7L << 61)) >> 14);
+         _val &= ((1L << 50)-1);
+ #elif defined(Q_OS_RTTHREAD) && defined(KERNEL_VADDR_START)
+-        _val &= ~KERNEL_VADDR_START;
++        static const quint64 KernelPointerFlag = quint64(1) << 48;
++        if ((_val & quint64(KERNEL_VADDR_START)) == quint64(KERNEL_VADDR_START))
++            _val = (_val & ~quint64(KERNEL_VADDR_START)) | KernelPointerFlag;
+ #endif
+     }
+ #elif QT_POINTER_SIZE == 4
